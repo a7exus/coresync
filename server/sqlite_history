@@ -1,0 +1,11 @@
+[root@my-core-st1 ~]# cat .sqlite_history 
+.tables
+.exit
+create table dumps(entity TEXT, filename TEXT, mtime INT, size INT, added INT);
+.tables
+.tables
+select * from dumps
+;
+select * from dumps;
+select * from dumps;
+
