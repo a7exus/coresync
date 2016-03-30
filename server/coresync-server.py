@@ -1,12 +1,10 @@
 #!/usr/bin/python
 
-#import socket
 import sqlite3
 import re
 import time
 import json
 import sys
-#import os
 import subprocess
 import BaseHTTPServer 
 import codecs
@@ -23,8 +21,7 @@ listenhost='0.0.0.0'
 timeperiod=3600  ## We always consider dumps hourly
 logfilename='/var/log/coresync-server.log'
 loglevel=3 # Trace 
-#TODO: move to onlineconf
-mailto='a.loskutov@corp.mail.ru,t.khryukin@mail.ru,e.molchanov@corp.mail.ru,aleksey.mashanov@mail.ru,utenkov@corp.mail.ru,y.sokolov@corp.mail.ru,m.maltsev@corp.mail.ru,ivanov@corp.mail.ru,k.filatov@corp.mail.ru' # 
+#ERROR, INFO, DEBUG, TRACE = 0, 1, 2, 3
 
 logfile=codecs.open(logfilename,'a','utf-8')
 
@@ -40,18 +37,18 @@ def log( str, level=0 ):
     print >>logfile, time.strftime('%x %X'), prefix, str
     logfile.flush()
     return
-def mail(subj, text=''):
-    #log (u'Sending mail: %s\n%s'%(subj, text),2)
-    log (u'Sending mail: %s'%(subj),2)
+def getmailto(service):
+    return ','.join(settings['mailing'].get(settings['servicegroups'].get(service,'default'),''))
+
+def mail(service, subj, text=''):
+    mailto=getmailto(service)
+    log (u'Sending mail: %s to %s'%(subj, mailto),2)
     proc=subprocess.Popen('mail -s "%s" "%s"'%(subj, mailto), stdin=subprocess.PIPE, shell=True)
     proc.stdin.write(text.encode('utf-8'))
     proc.stdin.close()
 
 def processfile(fmdata):
     "This checks if we need the file and requests it"
-    #if len(fmdata.split(' ')) != 3:
-    #    log("fmdata incorrect field number: "+str(fmdata))
-    #    return 0
     (fname, fsize, fmtime) = (fmdata.get('name'), fmdata.get('size'), fmdata.get('mtime'))
     fsize=int(fsize)
     fmtime=int(float(fmtime))
@@ -65,15 +62,15 @@ def processfile(fmdata):
     (fentity,away) = fname.split('.', 1)
     log('Calculated entity name:%s'%(fentity,), 3)
     
-    if not dumpslimit.has_key(fentity):
-        log ('Dumpslimit not found for entity %s, using default %d' % (fentity, dumpslimit['default']), 1)
+    if not settings['dumpslimit'].has_key(fentity):
+        log ('Dumpslimit not found for entity %s, using default %d' % (fentity, settings['dumpslimit']['default']), 1)
     calculated_threshold_time=max(
             int(time.time()) - timeperiod, 
-            min(int(dumpslimitreset.get(fentity, 0)), int(time.time()))
+            min(int(settings['dumpslimitreset'].get(fentity, 0)), int(time.time()))
     )
     log ('Current time is: %d, calculated_threshold_time is %d, timediff is %d' % (int(time.time()), calculated_threshold_time, int(time.time()) - calculated_threshold_time), 2)
     params = (
-        int(dumpslimit.get(fentity, dumpslimit['default'])),
+        int(settings['dumpslimit'].get(fentity, settings['dumpslimit']['default'])),
         fentity, 
         int(calculated_threshold_time)
     )
@@ -99,7 +96,7 @@ def processfile(fmdata):
 def processmetadata(data):
     log(u'processing metadata %r'%data,3)
     log(u'email: ',3)
-    log(u'Core dump is on the way: http://my-core-st1.s.smailru.net/%(name)s Host: %(hostname)s Version: %(package)s binary: %(binary)s %(gdbresult)s '%data, 3)
+    log(u'Core dump is on the way: http://my-core-st1.s.smailru.net/%(hostname)s/%(name)s Host: %(hostname)s Version: %(package)s binary: %(binary)s %(gdbresult)s '%data, 3)
     data['alpha']=''
     if (data['hostname'].find('alpha') != -1):
         data['alpha']='Alpha '
@@ -107,7 +104,7 @@ def processmetadata(data):
         data['alpha']='Beta '
     if (data['hostname'].find('gamma') != -1):
         data['alpha']='Gamma '
-    mail(u'%(alpha)sCoredump %(basename)s'%data, u'''Core dump is on the way: http://my-core-st1.s.smailru.net/%(name)s
+    mail(data['basename'], u'%(alpha)sCoredump %(basename)s'%data, text=u'''Core dump is on the way: http://my-core-st1.s.smailru.net/%(hostname)s/%(name)s
 Host: %(hostname)s
 Version: %(package)s
 binary: %(binary)s
@@ -119,22 +116,19 @@ GDB:
     '''%data)
 
 def getSettings():
-    global dumpslimit, dumpslimitreset
+    global settings
+    settings={}
+    #global dumpslimit, dumpslimitreset, groups, mailing
     with open (configfile, 'r') as f:
         for l in f:
             l=l.lstrip()
-            if l.find('dumpslimit:JSON')==0: dumpslimit=json.loads(l.replace('dumpslimit:JSON ',''))
-            if l.find('dumpslimitreset:JSON')==0: dumpslimitreset=json.loads(l.replace('dumpslimitreset:JSON ',''))
-    if not dumpslimit.has_key('default'):
+            if l.find('dumpslimit:JSON')==0: settings['dumpslimit']=json.loads(l.replace('dumpslimit:JSON ',''))
+            if l.find('dumpslimitreset:JSON')==0: settings['dumpslimitreset']=json.loads(l.replace('dumpslimitreset:JSON ',''))
+            if l.find('groups:JSON')==0: settings['servicegroups']=json.loads(l.replace('groups:JSON ',''))
+            if l.find('mailing:JSON')==0: settings['mailing']=json.loads(l.replace('mailing:JSON ',''))
+    if not settings['dumpslimit'].has_key('default'):
         log('Dumpslimit default not found, this will possibly crash coresync-server', 0)
     return
-
-# Constants
-ERROR=0
-INFO=1
-DEBUG=2
-TRACE=3
-
 
 class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def log_request(code,size):
@@ -179,9 +173,8 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
 # main()
 getSettings()
-log("Starting with settings: "+ str(dumpslimit)+' '+str(dumpslimitreset),1)
+log("Starting with settings: "+ str(settings['dumpslimit'])+' '+str(settings['dumpslimitreset']),1)
 cur=con.cursor()
-
 
 server_class = BaseHTTPServer.HTTPServer
 httpd = server_class((listenhost, listenport), MyHandler)
@@ -196,34 +189,3 @@ log(str(time.asctime())+" Server Stops - %s:%s" % (listenhost, listenport),1)
 
 
 sys.exit(0)
-
-#-------------------------------------------------------
-#-------------   OLD STYLE  ----------------------------
-#-------------------------------------------------------
-'''
-#s=socket.socket()
-#s.bind((listenhost,listenport))
-
-s.listen(5)
-while 1:
-    (c, addr) = s.accept()
-    log('Accepted connection from: '+str(addr), 1)
-    buffer=''
-
-    while 1:
-        data=c.recv(4096)
-        if not data:
-            break
-        buffer+=data
-        while '\n' in buffer:
-            (line, buffer) = buffer.split('\n', 1)
-            log ('Got line: '+line, 3)
-            processfile(line,c)
-            log('---------',1)
-    if (buffer):
-        log('Got remainder: '+buffer, 3)
-        processfile(line,c)
-    log('Closing connection', 1)
-    con.commit()
-    c.close()
-'''
