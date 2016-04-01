@@ -5,14 +5,21 @@ import string
 import time
 import json
 import sys
-import subprocess
 import requests
 import re
 import random
-from subprocess import PIPE,Popen
+from subprocess import CalledProcessError,PIPE,Popen
 
+if len(sys.argv) > 2 or len(sys.argv) < 1:
+    print >> sys.stderr, 'Usage: [--debug]'
+    sys.exit(1)
 
-debug=1
+debug=False
+if len(sys.argv) == 2:
+    if sys.argv[1] == '--debug':
+        print 'Debug on'
+        debug=True
+
 loglevel=3 #Trace
 
 dir="/var/core"
@@ -30,7 +37,8 @@ basic_url=httpsrv+"dump"
 # TODO: add timing to log
 def log(str, level=0):
     "This writes to log, loglevels: 0=error, 1=info, 2=debug, 3=trace"
-    if (level>loglevel): return
+    if (level>loglevel): 
+        return
     if level == 0: prefix='ERROR:'
     elif level==1: prefix='INFO:'
     elif level==2: prefix='DEBUG:'
@@ -51,10 +59,12 @@ def getmetadata(fname):
     rpmpackage=""
     try:
         binary=outp(["which",basename]).strip()
-    except subprocess.CalledProcessError:
+    except CalledProcessError:
         pass
-    if(binary):
-        print "gdb", binary, dir+"/"+fname, "-ex", "bt", "-ex", "quit"
+    log('Binary: %s'%binary,3)
+    if not os.path.isfile ("/usr/bin/gdb"): log('Gdb not found',2)
+    if (binary) and os.path.isfile ("/usr/bin/gdb"):
+        log(' '.join(("gdb", binary, dir+"/"+fname, "-ex", "bt", "-ex", "quit")),2)
         gdbresult=outp(["/usr/bin/gdb", binary, dir+"/"+fname, "-ex", "bt", "-ex", "quit"])
         rpmpackage=outp(["rpm", "-qf", binary])
     return {
@@ -65,15 +75,9 @@ def getmetadata(fname):
         "gdbresult": gdbresult
     }
 
-# Constants
-ERROR=0
-INFO=1
-DEBUG=2
-TRACE=3
-
 # Main
 valid_chars='-_.%s%s'%(string.ascii_letters, string.digits)
-files=[]
+rsync_list=[]
 log ('Coredumps-processor starting for dir: %s and server %s' % (dir, httpsrv), 1)
 
 if (not debug):
@@ -94,35 +98,35 @@ for fname in filelist:
     try:
         mdata=os.stat(dir +"/"+ fname)
     except OSError:
-        break
+        continue
     if (mdata.st_mtime < time.time()-4000):
-        log('Encountered an old file: %s.'%(fname,),1)
+        log('Old file: %s. Stopped file scan.'%(fname,),1)
         break
     if (mdata.st_mtime > time.time()-5):
-        log('Too new file: %s. Maybe still incomplete. '%(fname,),1)
-        break
-    if (mdata.st_size > 10000000000):
+        log('Too new file: %s. Maybe still incomplete. Skipping.'%(fname,),1)
+        continue
+    if (mdata.st_size > 3000000000):
         log('File %s too large: %d bytes. Skipping.'%(fname,mdata.st_size),1)
-        break
+        continue
     dump_basic={"name":fname, "size":str(mdata.st_size), "mtime":str(mdata.st_mtime)}
+    log('Looks good: %s'%fname, 2)
+    log('metadata: %s'%str(dump_basic),2)
     curstr = json.dumps(dump_basic)
-    # TODO: add hostname, gdb
-    log('About to send this metadata: %s ' % (curstr), 3)
+    log('About to send json metadata: %s ' % (curstr), 3)
     r = requests.post(basic_url, data=curstr)
-    if debug: print (r.text)
+    log("Result: %s"%r.text, 3)
     if (r.text == "1"):
-        if debug: print json.dumps(getmetadata(fname))
+        log(json.dumps(getmetadata(fname)),3)
         metadata={}
         metadata.update(dump_basic)
         metadata.update(getmetadata(fname))
         r = requests.post(metadata_url, data=json.dumps(metadata))
-        files.append(dir+'/'+fname)
+        rsync_list.append(dir+'/'+fname)
 
-log ('Created list: '+' '.join(files),2)
-if files:
-    args = ('rsync', '-vP') + tuple(files) + ((rsync_baseurl + socket.gethostname() + '/'), )
+log ('Created list: '+' '.join(rsync_list),2)
+if rsync_list:
+    args = ('rsync', '-v', '--sparse') + tuple(rsync_list) + ((rsync_baseurl + socket.gethostname() + '/'), )
+    log('Now starting: %s'%' '.join(args), 2)
     if(not debug): 
-        os.execv('/usr/bin/rsync', args) 
-    else: 
-        log("Would have executed: %s"%(' '.join(args)),2)
+        os.execv('/usr/bin/rsync', args)
 

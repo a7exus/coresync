@@ -37,11 +37,9 @@ def log( str, level=0 ):
     print >>logfile, time.strftime('%x %X'), prefix, str
     logfile.flush()
     return
-def getmailto(service):
-    return ','.join(settings['mailing'].get(settings['servicegroups'].get(service,'default'),''))
 
 def mail(service, subj, text=''):
-    mailto=getmailto(service)
+    mailto=','.join(s.mailbyservice[service])
     log (u'Sending mail: %s to %s'%(subj, mailto),2)
     proc=subprocess.Popen('mail -s "%s" "%s"'%(subj, mailto), stdin=subprocess.PIPE, shell=True)
     proc.stdin.write(text.encode('utf-8'))
@@ -62,15 +60,16 @@ def processfile(fmdata):
     (fentity,away) = fname.split('.', 1)
     log('Calculated entity name:%s'%(fentity,), 3)
     
-    if not settings['dumpslimit'].has_key(fentity):
-        log ('Dumpslimit not found for entity %s, using default %d' % (fentity, settings['dumpslimit']['default']), 1)
+    s.reload()
+    if not s.dumpslimit.has_key(fentity):
+        log ('Dumpslimit not found for entity %s, using default %d' % (fentity, s.dumpslimit['default']), 1)
     calculated_threshold_time=max(
             int(time.time()) - timeperiod, 
-            min(int(settings['dumpslimitreset'].get(fentity, 0)), int(time.time()))
+            min(int(s.dumpslimitreset.get(fentity, 0)), int(time.time()))
     )
     log ('Current time is: %d, calculated_threshold_time is %d, timediff is %d' % (int(time.time()), calculated_threshold_time, int(time.time()) - calculated_threshold_time), 2)
     params = (
-        int(settings['dumpslimit'].get(fentity, settings['dumpslimit']['default'])),
+        int(s.dumpslimit.get(fentity, s.dumpslimit['default'])),
         fentity, 
         int(calculated_threshold_time)
     )
@@ -115,20 +114,36 @@ GDB:
 %(gdbresult)s
     '''%data)
 
-def getSettings():
-    global settings
-    settings={}
-    #global dumpslimit, dumpslimitreset, groups, mailing
-    with open (configfile, 'r') as f:
-        for l in f:
-            l=l.lstrip()
-            if l.find('dumpslimit:JSON')==0: settings['dumpslimit']=json.loads(l.replace('dumpslimit:JSON ',''))
-            if l.find('dumpslimitreset:JSON')==0: settings['dumpslimitreset']=json.loads(l.replace('dumpslimitreset:JSON ',''))
-            if l.find('groups:JSON')==0: settings['servicegroups']=json.loads(l.replace('groups:JSON ',''))
-            if l.find('mailing:JSON')==0: settings['mailing']=json.loads(l.replace('mailing:JSON ',''))
-    if not settings['dumpslimit'].has_key('default'):
-        log('Dumpslimit default not found, this will possibly crash coresync-server', 0)
-    return
+class Settings():
+    def __init__(self, configfile):
+        self.configfile=configfile
+        self.lastreload=0
+        self.reload()
+    def __str__(self):
+        return str({
+            'configfile':self.configfile, 
+            'dumpslimit':self.dumpslimit, 
+            'dumpslimitreset': self.dumpslimitreset, 
+            'servicegroups': self.servicegroups, 
+            'mailing': self.mailing})
+    def reload(self):
+        if (time.time() - self.lastreload) < 50: return
+        log('Reloading config', 2)
+        self.lastreload = time.time()
+        with open (self.configfile, 'r') as f:
+            for l in f:
+                l=l.lstrip()
+                if l.find('dumpslimit:JSON')==0: self.dumpslimit=json.loads(l.replace('dumpslimit:JSON ',''))
+                elif l.find('dumpslimitreset:JSON')==0: self.dumpslimitreset=json.loads(l.replace('dumpslimitreset:JSON ',''))
+                elif l.find('groups:JSON')==0: self.servicegroups=json.loads(l.replace('groups:JSON ',''))
+                elif l.find('mailing:JSON')==0: self.mailing=json.loads(l.replace('mailing:JSON ',''))
+        if not self.dumpslimit.has_key('default'):
+            log('Dumpslimit default not found, this will possibly crash coresync-server', 0)
+        self.mailbyservice={}
+        for gr in self.servicegroups:
+            for srv in self.servicegroups[gr]:
+                if not srv in self.mailbyservice: self.mailbyservice[srv]=[]
+                self.mailbyservice[srv].extend(self.mailing.get(gr,self.mailing['default']))
 
 class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def log_request(code,size):
@@ -153,7 +168,6 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                 s.send_response(200)
                 s.send_header("Content-Type", "text/plain")
                 s.end_headers()
-                getSettings()
                 s.wfile.write(processfile(data))
             elif (s.path == '/metadata'):
                 try:
@@ -172,8 +186,9 @@ class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         return
 
 # main()
-getSettings()
-log("Starting with settings: "+ str(settings['dumpslimit'])+' '+str(settings['dumpslimitreset']),1)
+s=Settings(configfile)
+
+log("Starting with settings: %s"%s,1)
 cur=con.cursor()
 
 server_class = BaseHTTPServer.HTTPServer
