@@ -81,7 +81,7 @@ rsync_list=[]
 log ('Coredumps-processor starting for dir: %s and server %s' % (dir, httpsrv), 1)
 
 if (not debug):
-    sleeptime=random.uniform(0,10)
+    sleeptime=random.uniform(0,20)
     log('Sleeping for %f secs'%sleeptime,1)
     time.sleep(sleeptime)
 
