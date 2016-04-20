@@ -9,6 +9,9 @@ import requests
 import re
 import random
 from subprocess import CalledProcessError,PIPE,Popen
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
 
 if len(sys.argv) > 2 or len(sys.argv) < 1:
     print >> sys.stderr, 'Usage: [--debug]'
@@ -62,8 +65,9 @@ def getmetadata(fname):
     except CalledProcessError:
         pass
     log('Binary: %s'%binary,3)
-    if not os.path.isfile ("/usr/bin/gdb"): log('Gdb not found',2)
-    if (binary) and os.path.isfile ("/usr/bin/gdb"):
+    if not binary: log('binary not found',2)
+    elif not os.path.isfile ("/usr/bin/gdb"): log('Gdb not found',2)
+    else:   #if (binary) and os.path.isfile ("/usr/bin/gdb"):
         log(' '.join(("gdb", binary, dir+"/"+fname, "-ex", "bt", "-ex", "quit")),2)
         gdbresult=outp(["/usr/bin/gdb", binary, dir+"/"+fname, "-ex", "bt", "-ex", "quit"])
         rpmpackage=outp(["rpm", "-qf", binary])
