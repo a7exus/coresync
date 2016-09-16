@@ -9,6 +9,9 @@ import subprocess
 import BaseHTTPServer 
 import codecs
 import os
+# TODO: logging
+#import logging
+#logging.basicConfig(level=logging.DEBUG)
 
 # Variables
 sqlitedbase='/usr/local/bin/coresync-server.sqlite'
@@ -25,7 +28,6 @@ loglevel=3 # Trace
 
 logfile=codecs.open(logfilename,'a','utf-8')
 
-
 def log( str, level=0 ):
     "This writes to log, loglevels: 0=error, 1=info, 2=debug, 3=trace"
     if (level>loglevel): return
@@ -39,7 +41,7 @@ def log( str, level=0 ):
     return
 
 def mail(service, subj, text=''):
-    mailto=','.join(s.mailbyservice[service])
+    mailto=','.join(s.mailbyservice.get(service,s.mailing['other']))
     log (u'Sending mail: %s to %s'%(subj, mailto),2)
     proc=subprocess.Popen('mail -s "%s" "%s"'%(subj, mailto), stdin=subprocess.PIPE, shell=True)
     proc.stdin.write(text.encode('utf-8'))
@@ -108,7 +110,8 @@ Host: %(hostname)s
 Version: %(package)s
 binary: %(binary)s
 
-Please contact a.loskutov@corp.mail.ru to unsubscribe.
+Questions: a.loskutov@corp.mail.ru
+Subscription: onlineconf/module/coresync
 
 GDB:
 %(gdbresult)s
@@ -135,15 +138,16 @@ class Settings():
                 l=l.lstrip()
                 if l.find('dumpslimit:JSON')==0: self.dumpslimit=json.loads(l.replace('dumpslimit:JSON ',''))
                 elif l.find('dumpslimitreset:JSON')==0: self.dumpslimitreset=json.loads(l.replace('dumpslimitreset:JSON ',''))
-                elif l.find('groups:JSON')==0: self.servicegroups=json.loads(l.replace('groups:JSON ',''))
-                elif l.find('mailing:JSON')==0: self.mailing=json.loads(l.replace('mailing:JSON ',''))
+                elif l.find('daemon_groups:JSON')==0: self.servicegroups=json.loads(l.replace('daemon_groups:JSON ',''))
+                elif l.find('mailing_groups:JSON')==0: self.mailing=json.loads(l.replace('mailing_groups:JSON ',''))
         if not self.dumpslimit.has_key('default'):
             log('Dumpslimit default not found, this will possibly crash coresync-server', 0)
         self.mailbyservice={}
         for gr in self.servicegroups:
             for srv in self.servicegroups[gr]:
                 if not srv in self.mailbyservice: self.mailbyservice[srv]=[]
-                self.mailbyservice[srv].extend(self.mailing.get(gr,self.mailing['default']))
+                self.mailbyservice[srv].extend(self.mailing.get(gr,self.mailing['other']))
+                self.mailbyservice[srv].extend(self.mailing.get(self.mailing['all']))
 
 class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def log_request(code,size):
@@ -201,6 +205,5 @@ except KeyboardInterrupt:
     pass
 httpd.server_close()
 log(str(time.asctime())+" Server Stops - %s:%s" % (listenhost, listenport),1)
-
 
 sys.exit(0)
